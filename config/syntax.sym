@@ -1,0 +1,15 @@
+#
+# Syntax file
+#
+
+# The where keyword
+
+@where "where";
+
+# An identifier
+
+identifier_head_character [a-z] | [A-Z] | "_";
+
+identifier_tail_character $identifier_head_character | [0-9];
+
+@identifier $identifier_head_character $identifier_tail_character *;
