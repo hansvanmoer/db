@@ -13,8 +13,6 @@
 #ifndef REGEX_H
 #define REGEX_H
 
-#include "regex_nfa.h"
-
 #include <stdbool.h>
 #include <stdio.h>
 
@@ -192,37 +190,140 @@ struct regex_symbols * parse_regex_symbols(FILE * file);
 void destroy_regex_symbols(struct regex_symbols * symbols);
 
 /**
- * A regex
+ * A regex state
  */
-struct regex {
+struct regex_state {
   /**
-   * The symbols
+   * The inclusive lower bound for a match
    */
-  struct regex_symbol * symbols;
+  char lower;
+  /**
+   * The exclusive upper bound for a match
+   */
+  char upper;
 
   /**
-   * The number of symbols
+   * If it's a match, transition to this state
+   * If there is no transition, set to zero
+   */
+  size_t then;
+
+  /**
+   * If no match, transition to this state
+   * If there is no second transition, set to the same value as the first transition
+   */
+  size_t otherwise;
+
+  /**
+   * If this is an end state, this represents an index into the symbol table
+   * If not a valid end state, set to -1;
+   */
+  int end;
+};
+
+/**
+ * A nfa representing a regex
+ */
+struct regex_nfa {
+  /**
+   * The state buffer
+   */
+  struct regex_state * states;
+
+  /**
+   * The length of the state buffer
    */
   size_t len;
 
   /**
-   * The non deterministic automaton
+   * The current size of the state buffer
    */
-  struct regex_nfa nfa;
+  size_t size;
+
+  /**
+   * The symbol table
+   */
+  const char ** symbols;
+
+  /**
+   * The number of symbols
+   */
+  size_t symbols_len;
 };
 
 /**
- * Creates a regex from the specified file
- * \param regex the regex
- * \param file the input file
- * \return 0 on success, -1 on failure
+ * A regex matcher
  */
-int init_regex_from_file(struct regex * regex, FILE * file);
+struct regex_matcher {
+  /**
+   * The state machine representing the regex
+   */
+  const struct regex_nfa * nfa;
+
+  /**
+   * The stack buffer
+   */
+  size_t * stack;
+
+  /**
+   * The size of the stack buffer
+   */
+  size_t size;
+  
+  /**
+   * The length of the match
+   * If no match was found, len is set to 0
+   */
+  size_t len;
+
+  /**
+   * An index into the symbol table representing the symbol found
+   * If no symbol is found, this value is undefined
+   */
+  size_t symbol;
+};
 
 /**
- * Disposes of all the resources associated with this regex
- * \param regex the regex
+ * Parses a regex state machine from a symbol file
+ * \param file the symbol file
+ * \param nfa a pointer to the state machine
+ * \return 0 on success, -1 on failure
  */
-void dispose_regex(struct regex * regex);
+int parse_regex_nfa(FILE * file, struct regex_nfa * nfa);
+
+/**
+ * Destroys a regex state machine
+ * \param nfa a pointer to the state machine
+ */
+void dispose_regex_nfa(struct regex_nfa * nfa);
+
+/**
+ * Initializes a matcher
+ * \param m the matcher
+ * \param nfa the regex state machine
+ * \return 0 on success, -1 on failure 
+ */
+int init_regex_matcher(struct regex_matcher * m, const struct regex_nfa * nfa);
+
+/**
+ * Maches an input string with a regex
+ * Match length and symbol is stored on the matcher on success
+ * \param m the matcher
+ * \param input the input string
+ * \return 0 on success, -1 when no match was found
+ */
+int match_regex(struct regex_matcher * m, const char * input);
+
+/**
+ * Resets a matcher
+ * \param m the matcher
+ */
+void reset_regex_matcher(struct regex_matcher * m);
+
+/**
+ * Disposes of a matcher, but does not destroy the underlying state machine
+ * \param m the matcher
+ */
+void dispose_regex_matcher(struct regex_matcher * m);
 
 #endif

@@ -1169,186 +1169,252 @@ struct regex_symbols * parse_regex_symbols(FILE * file) {
   return symbols;
 }
 
-static int add_regex_node_states(struct regex_nfa * nfa, regex_nfa_id * start, regex_nfa_id * end, const struct regex_node * node);
+/**
+ * Copies the regex symbol names into a buffer
+ * \param dest the destination buffer to be created
+ * \param symbol_count set to the number of symbols
+ * \param symbols the original set of symbols
+ * \return 0 on success, -1 on error
+ */
+static int copy_regex_symbol_names(const char *** dest, size_t * symbol_count, struct regex_symbols * symbols) {
 
-static int add_regex_character_state(struct regex_nfa * nfa, regex_nfa_id * start, int c) {
-  assert(nfa != NULL);
-  assert(start != NULL);
-  assert(c != 0);
- 
-  LOG_DEBUG("add state for character");
-  regex_nfa_id id;
-  if(add_regex_nfa_state(nfa, &id) != 0) {
-    return -1;
-  }
-  set_regex_nfa_predicate(nfa, id, c);
-  *start = id;
-  return 0;
-}
-
-static int add_regex_branch_states(struct regex_nfa * nfa, regex_nfa_id * start, regex_nfa_id * end, struct regex_node * left, const struct regex_node * right) {
-  assert(nfa != NULL);
-  assert(start != NULL);
-  assert(end != NULL);
-  assert(left != NULL);
-  assert(right != NULL);
-
-
-  regex_nfa_id before;
-  if(add_regex_nfa_state(nfa, &before) != 0) {
-    return -1;
+  size_t count = 0;
+  struct regex_symbol * s = symbols->head;
+  while(s->next != NULL) {
+    ++count;
+    s = s->next;
   }
 
-  regex_nfa_id left_start;
-  regex_nfa_id left_end;
-  if(add_regex_node_states(nfa, &left_start, &left_end, left) != 0) {
-    return -1;
-  }
+  const char ** names = NULL;
   
-  regex_nfa_id right_start;
-  regex_nfa_id right_end;
-  if(add_regex_node_states(nfa, &right_start, &right_end, right) != 0) {
-    return -1;
-  }
-  
-  regex_nfa_id after;
-  if(add_regex_nfa_state(nfa, &after) != 0) {
-    return -1;
-  }
-  
-  set_regex_nfa_next(nfa, before, left_start);
-  set_regex_nfa_otherwise(nfa, before, right_start);
-  set_regex_nfa_next(nfa, left_end, after);
-  set_regex_nfa_next(nfa, right_end, after);
-  return 0;  
-}
-
-static int add_regex_range_states(struct regex_nfa * nfa, regex_nfa_id * start, regex_nfa_id *end, int first, int last) {
-  assert(nfa != NULL);
-  assert(start != NULL);
-  assert(end != NULL);
-  assert(first < last);
-  
-  LOG_DEBUG("add state for character range");
-
-  regex_nfa_id id;
-  if(add_regex_character_state(nfa, &id, last - 1) != 0) {
-    return -1;
-  }
-  regex_nfa_id prev_begin = id;
-  regex_nfa_id prev_end = id;
-  
-  for(int c = last - 2; c >= first; --c) {
+  if(count != 0) {
+    names = malloc(sizeof(char *) * count);
+    if(names == NULL) {
+      return -1;
+    }
     
-    regex_nfa_id before;
-    if(add_regex_nfa_state(nfa, &before) != 0) {
-      return -1;
+    s = symbols->head;
+    for(int i = 0; i < count; ++i) {
+      size_t len = strlen(s->name);
+      char * name = malloc(len + 1);
+      if(name == NULL) {
+	free(names);
+	return -1;
+      }
+      strcpy(name, s->name);
+      names[i] = name;
+      s = s->next;
     }
-    if(add_regex_character_state(nfa, &id, c) != 0) {
-      return -1;
-    }
-    set_regex_nfa_predicate(nfa, id, c);
-    regex_nfa_id after;
-    if(add_regex_nfa_state(nfa, &after) != 0) {
-      return -1;
-    }
-    set_regex_nfa_next(nfa, before, prev_begin);
-    set_regex_nfa_next(nfa, prev_end, after);
-    set_regex_nfa_otherwise(nfa, before, id);
-    set_regex_nfa_next(nfa, id, after);
-
-    prev_begin = before;
-    prev_end = after;
   }
-
-  *start = prev_begin;
-  *end = prev_end;
+  *dest = names;
+  *symbol_count = count;
   return 0;
 }
 
-static int add_regex_loop_states(struct regex_nfa *nfa, regex_nfa_id * start, regex_nfa_id * end, const struct regex_node * body) {
+#define INITIAL_REGEX_NFA_BUFFER_SIZE 32
+
+static int add_regex_state(struct regex_nfa * nfa, size_t * result) {
   assert(nfa != NULL);
-  assert(start != NULL);
-  assert(end != NULL);
-  assert(body != NULL);
-
-  regex_nfa_id before;
-  if(add_regex_nfa_state(nfa, &before) != 0) {
-    return -1;
-  }
-
-  regex_nfa_id body_start;
-  regex_nfa_id body_end;
-  if(add_regex_node_states(nfa, &body_start, &body_end, body) != 0) {
-    return -1;
-  }
-  set_regex_nfa_next(nfa, before, body_start);
+  assert(result != NULL);
   
-  regex_nfa_id after;
-  if(add_regex_nfa_state(nfa, &after) != 0) {
-    return -1;
+  if(nfa->len == nfa->size) {
+    size_t nsize;
+    if(nfa->size == 0) {
+      nsize = INITIAL_REGEX_NFA_BUFFER_SIZE;
+    } else {
+      nsize = nfa->size * 2;
+    }
+    struct regex_state * nstates = realloc(nfa->states, nsize * sizeof(struct regex_state));
+    if(nstates == NULL) {
+      return -1;
+    } else {
+      nfa->states = nstates;
+      nfa->size = nsize;
+    }
   }
-  set_regex_nfa_next(nfa, after, body_end);
-  set_regex_nfa_otherwise(nfa, before, after);
-  set_regex_nfa_otherwise(nfa, body_start, body_end);
-  *start = before;
-  * end = after;
+  *result = nfa->len;
+  ++nfa->len;
   return 0;
 }
 
-static int add_regex_sequence_states(struct regex_nfa * nfa, regex_nfa_id * start, regex_nfa_id * end, const struct regex_node * left, const struct regex_node * right) {
-  assert(nfa != NULL);
-  assert(start != NULL);
-  assert(end != NULL);
-  assert(left != NULL);
-  assert(right != NULL);
 
-  regex_nfa_id left_end;
-  if(add_regex_node_states(nfa, start, &left_end, left) != 0) {
-    return -1;
-  }
-  regex_nfa_id right_start;
-  if(add_regex_node_states(nfa, &right_start, end, right) != 0) {
-    return -1;
-  }
-  set_regex_nfa_next(nfa, left_end, right_start);
+static int build_regex_nfa_from_node(struct regex_nfa * nfa, struct regex_node * node, size_t * first, size_t * last);
+
+static int build_regex_sequence_nfa(struct regex_nfa * nfa, struct regex_node * node, size_t * first, size_t * last) {
   return 0;
 }
 
-static int add_regex_node_states(struct regex_nfa * nfa, regex_nfa_id * start, regex_nfa_id * end, const struct regex_node * node) {
+static int build_regex_branch_nfa(struct regex_nfa * nfa, struct regex_node * node, size_t * first, size_t * last) {
+  return 0;
+}
+
+static int build_regex_range_nfa(struct regex_nfa * nfa, struct regex_node * node, size_t * first, size_t * last) {
+  size_t id;
+  if(add_regex_state(nfa, &id) == -1) {
+    return -1;
+  }
+  struct regex_state * state = nfa->states + id;
+  state->lower = node->data.range.start;
+  state->upper = node->data.range.end + 1;
+  state->end = -1;
+  *first = id;
+  *last = id;
+  return 0;
+}
+
+/**
+ *
+ */
+static int build_regex_loop_nfa(struct regex_nfa * nfa, struct regex_node * node, size_t * first, size_t * last) {
+
+  // State machine:
+  // ? -> (Body start) -> ... -> (Body end) -> (End) -> ?
+  //      <-----------------------------------
+  //
+
+  size_t body_first;
+  size_t body_last;
+  if(build_regex_nfa_from_node(nfa, node->data.loop.body, &body_first, &body_last) == -1) {
+    return -1;
+  }
+
+  start->then = body_first;
+
+  size_t end_id;
+  if(add_regex_state(nfa, &end_id) == -1) {
+    return -1;
+  }
+  struct regex_state * end = nfa->states + end_id;
+  end->lower = 0;
+  end->upper = 0;
+  end->end = -1;
+
+  nfa->states[body_last].then = end_id;
+
+  *first = body_first;
+  *last = end_id;
+  
+  return 0;
+}
+
+static int build_regex_nfa_from_node(struct regex_nfa * nfa, struct regex_node * node, size_t * first, size_t * last) {
   assert(nfa != NULL);
-  assert(start != NULL);
-  assert(end != NULL);
   assert(node != NULL);
-
-  if(node->type == REGEX_TYPE_RANGE) {
-    return add_regex_range_states(nfa, start, end, node->data.range.start, node->data.range.end);
-  } else if(node->type == REGEX_TYPE_BRANCH) {
-    return add_regex_branch_states(nfa, start, end, node->data.children.left, node->data.children.right);
-  } else if(node->type == REGEX_TYPE_SEQUENCE) {
-    return add_regex_sequence_states(nfa, start, end, node->data.children.left, node->data.children.right);
-  } else if(node->type == REGEX_TYPE_LOOP) {
-    return add_regex_loop_states(nfa, start, end, node->data.loop.body);
-  } else {
-    LOG_ERROR("unknown node type");
+  assert(first != NULL);
+  assert(last != NULL);
+  switch(node->type) {
+  case REGEX_TYPE_SEQUENCE:
+    return build_regex_sequence_nfa(nfa, node, first, last);
+  case REGEX_TYPE_BRANCH:
+    return build_regex_branch_nfa(nfa, node, first, last);
+  case REGEX_TYPE_RANGE:
+    return build_regex_range_nfa(nfa, node, first, last);
+  case REGEX_TYPE_LOOP:
+    return build_regex_loop_nfa(nfa, node, first, last);
+  default:
     return -1;
   }
 }
 
-int init_regex_from_file(struct regex * regex, FILE * file) {
-  assert(regex != NULL);
-  assert(file != NULL);
+/**
+ * Builds a regex NFA, one symbol at a time
+ * \param the state machine
+ * \param the start state to be connected to the new state machine
+ * \param symbol the symbol to express
+ * \param id the index of the symbol, to be set at the end state
+ * \return 0 on success, -1 on error
+ */
+static int build_regex_nfa(struct regex_nfa * nfa, size_t start, struct regex_symbol * symbol, int id) {
+  assert(nfa != NULL);
+  assert(symbol != NULL);
+  assert(symbol->expression != NULL);
+  assert(id >= 0);
+  size_t first;
+  size_t last;
+  int result = build_regex_nfa_from_node(nfa, symbol->expression, &first, &last);
+  if(result == 0) {
+    nfa->states[start].then = first;
+    nfa->states[last].then = 0;
+    nfa->states[last].otherwise = 0;
+    nfa->states[last].end = id;
+  }
+  return result;
+}
 
+int parse_regex_nfa(FILE * file, struct regex_nfa * nfa) {
+  assert(file != NULL);
+  assert(nfa != NULL);
+  
   struct regex_symbols * symbols = parse_regex_symbols(file);
   if(symbols == NULL) {
     return -1;
   }
 
+  nfa->states = NULL;
+  nfa->size = 0;
+  nfa->len = 0;
+  if(copy_regex_symbol_names(&nfa->symbols, &nfa->symbols_len, symbols) == -1) {
+    destroy_regex_symbols(symbols);
+    return -1;
+  }
+
+  struct regex_symbol * s = symbols->head;
+  int index = 0;
+  size_t start;
+  
+  if(add_regex_state(nfa, &start) == -1) {
+    dispose_regex_nfa(nfa);
+    destroy_regex_symbols(symbols);
+    return -1;
+  }
+
+  while(s->next != NULL) {
+    struct regex_state * state = nfa->states + start;
+    state->lower = 0;
+    state->upper = 0;
+    state->end = -1;
+    
+    if(build_regex_nfa(nfa, start, s, index) == -1) {
+      dispose_regex_nfa(nfa);
+      destroy_regex_symbols(symbols);
+      return -1;
+    }
+    if(s->next == NULL) {
+      state->otherwise = state->then;
+    } else {
+      size_t next_state;
+      if(add_regex_state(nfa, &next_state) == -1) {
+	dispose_regex_nfa(nfa);
+	destroy_regex_symbols(symbols);
+	return -1;
+      }
+      state->otherwise = next_state;
+      start = next_state;
+    }
+    s = s->next;
+    ++index;
+  }
+
+  destroy_regex_symbols(symbols);
   return 0;
 }
 
-void dispose_regex(struct regex * regex) {
-  assert(regex != NULL);
+void dispose_regex_nfa(struct regex_nfa * nfa) {
+  
+}
 
-  dispose_regex_nfa(&regex->nfa);
+int init_regex_matcher(struct regex_matcher * m, const struct regex_nfa * nfa) {
+  return 0;
+}
+
+int match_regex(struct regex_matcher * m, const char * input) {
+  return 0;
+}
+
+void reset_regex_matcher(struct regex_matcher * m) {
+
+}
+
+void dispose_regex_matcher(struct regex_matcher * m) {
+
 }

@@ -4,4 +4,4 @@
 
 noinst_PROGRAMS=db
 
-db_SOURCES=logger.c main.c regex.c regex_nfa.c
+db_SOURCES=logger.c main.c regex.c

@@ -421,6 +421,7 @@ static enum log_status print_log_msgs(struct log_queue * q) {
     }
     msg = msg->next;
   }
+  return LOG_STATUS_OK;
 }
 
 /**
